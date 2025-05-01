@@ -2,123 +2,99 @@ import cv2
 import numpy as np
 import face_recognition
 import os
-import logging
-from datetime import datetime
+import requests
+from bs4 import BeautifulSoup
 
-# Configure logging
-logging.basicConfig(
-    filename=f'face_recognition_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log',
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+path = 'persons'
+images = []
+classNames = []
+personsList = os.listdir(path)
 
-def load_known_faces(path='persons'):
-    """Load known faces from the specified directory"""
-    try:
-        if not os.path.exists(path):
-            os.makedirs(path)
-            logging.info(f"Created directory: {path}")
-            return [], []
+for cl in personsList:
+    curImg = cv2.imread(f'{path}/{cl}')
+    if curImg is not None:
+        images.append(curImg)
+        classNames.append(os.path.splitext(cl)[0])
+print("Detected persons:", classNames)
 
-        images = []
-        classNames = []
-        personsList = os.listdir(path)
-        
-        for cl in personsList:
-            try:
-                curPerson = cv2.imread(f'{path}/{cl}')
-                if curPerson is not None:
-                    images.append(curPerson)
-                    classNames.append(os.path.splitext(cl)[0])
-                    logging.info(f"Successfully loaded image: {cl}")
-                else:
-                    logging.error(f"Failed to load image: {cl}")
-            except Exception as e:
-                logging.error(f"Error processing image {cl}: {str(e)}")
-        
-        return images, classNames
-    except Exception as e:
-        logging.error(f"Error in load_known_faces: {str(e)}")
-        return [], []
-
-def find_encodings(images):
-    """Generate face encodings for the given images"""
+def findEncodings(images):
     encodeList = []
-    try:
-        for img in images:
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            encode = face_recognition.face_encodings(img)[0]
-            encodeList.append(encode)
-        logging.info(f"Successfully encoded {len(encodeList)} faces")
-    except Exception as e:
-        logging.error(f"Error in find_encodings: {str(e)}")
+    for img in images:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        encode = face_recognition.face_encodings(img)[0]
+        encodeList.append(encode)
     return encodeList
 
-def main():
-    try:
-        # Load known faces
-        images, classNames = load_known_faces()
-        if not images:
-            logging.warning("No known faces found in the persons directory")
-            return
+encodeListKnown = findEncodings(images)
+print('✅ Encodings generated successfully.')
 
-        # Generate encodings
-        encodeListKnown = find_encodings(images)
-        if not encodeListKnown:
-            logging.error("Failed to generate face encodings")
-            return
+cap = cv2.VideoCapture(0)
 
-        logging.info("Face recognition system initialized successfully")
+recognized_name = None
 
-        # Initialize camera
-        cap = cv2.VideoCapture(0)
-        if not cap.isOpened():
-            logging.error("Failed to open camera")
-            return
+while True:
+    success, img = cap.read()
+    if not success:
+        break
 
-        while True:
-            success, img = cap.read()
-            if not success:
-                logging.error("Failed to capture frame from camera")
-                break
+    imgS = cv2.resize(img, (0, 0), None, 0.25, 0.25)
+    imgS = cv2.cvtColor(imgS, cv2.COLOR_BGR2RGB)
 
-            # Resize image for faster processing
-            imgS = cv2.resize(img, (0,0), None, 0.25, 0.25)
-            imgS = cv2.cvtColor(imgS, cv2.COLOR_BGR2RGB)
+    faceLocations = face_recognition.face_locations(imgS)
+    encodesCurFrame = face_recognition.face_encodings(imgS, faceLocations)
 
-            # Find faces in the current frame
-            faceCurrentFrame = face_recognition.face_locations(imgS)
-            encodeCurrentFrame = face_recognition.face_encodings(imgS, faceCurrentFrame)
+    for encodeFace, faceLoc in zip(encodesCurFrame, faceLocations):
+        matches = face_recognition.compare_faces(encodeListKnown, encodeFace)
+        faceDis = face_recognition.face_distance(encodeListKnown, encodeFace)
+        matchIndex = np.argmin(faceDis)
 
-            for encodeFace, faceLoc in zip(encodeCurrentFrame, faceCurrentFrame):
-                matches = face_recognition.compare_faces(encodeListKnown, encodeFace)
-                faceDis = face_recognition.face_distance(encodeListKnown, encodeFace)
-                matchIndex = np.argmin(faceDis)
+        if matches[matchIndex]:
+            name = classNames[matchIndex].title()
+            recognized_name = name
+            print(f"✅ Recognized: {name}")
 
-                if matches[matchIndex]:
-                    name = classNames[matchIndex].upper()
-                    logging.info(f"Recognized face: {name}")
-                    
-                    # Scale back up face locations
-                    y1, x2, y2, x1 = faceLoc
-                    y1, x2, y2, x1 = y1*4, x2*4, y2*4, x1*4
-                    
-                    # Draw rectangle around face
-                    cv2.rectangle(img, (x1, y1), (x2, y2), (0,255,0), 2)
-                    cv2.rectangle(img, (x1,y2-35), (x2,y2), (0,255,0), cv2.FILLED)
-                    cv2.putText(img, name, (x1+6, y2-6), cv2.FONT_HERSHEY_COMPLEX, 1, (255,255,255), 2)
+            y1, x2, y2, x1 = faceLoc
+            y1, x2, y2, x1 = y1 * 4, x2 * 4, y2 * 4, x1 * 4
+            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(img, name, (x1 + 6, y2 - 6),
+                        cv2.FONT_HERSHEY_COMPLEX, 1, (255, 255, 255), 2)
 
-            cv2.imshow('Face Recognition', img)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-
-    except Exception as e:
-        logging.error(f"Error in main: {str(e)}")
-    finally:
-        if 'cap' in locals():
             cap.release()
-        cv2.destroyAllWindows()
-        logging.info("Face recognition system shut down")
+            cv2.destroyAllWindows()
+            break
 
-if __name__ == "__main__":
-    main()
+    cv2.imshow('Face Recognition', img)
+    if cv2.waitKey(1) == ord('q') or recognized_name:
+        break
+#===================================================
+def get_player_info(name):
+    print(f"\n🔍 Gathering data about: {name} from Wikipedia...\n")
+    wiki_name = name.replace(' ', '_')
+    url = f"https://en.wikipedia.org/wiki/{wiki_name}"
+
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error fetching the page: {e}")
+        return
+
+    soup = BeautifulSoup(response.text, 'html.parser')
+    infobox = soup.find('table', {'class': 'infobox'})
+
+    if not infobox:
+        print("❌ No information found.")
+        return
+
+    for row in infobox.find_all('tr'):
+        header = row.find('th')
+        data = row.find('td')
+        if header and data:
+            key = header.text.strip()
+            value = data.text.strip()
+            print(f"{key}: {value}")
+
+if recognized_name:
+    get_player_info(recognized_name)
+else:
+    print("❗ No face recognized.")
